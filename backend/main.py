@@ -56,15 +56,15 @@ async def lifespan(app: FastAPI):
     has_key  = bool(os.getenv("sarvam_api_key"))
 
     print("\n" + "="*60)
-    print("[CallIQ] Server started")
-    print(f"[CallIQ] USE_MOCK    = {os.getenv('USE_MOCK', 'not set (defaulting to true)')}")
-    print(f"[CallIQ] Mode        = {'⚠️  MOCK — real audio NOT transcribed' if use_mock else '✅ LIVE — Sarvam AI active'}")
-    print(f"[CallIQ] Sarvam key  = {'✓ SET' if has_key else '✗ NOT SET (required for LIVE mode)'}")
-    print(f"[CallIQ] Docs        = http://localhost:8000/docs")
-    print(f"[CallIQ] Env check   = http://localhost:8000/api/debug/env")
+    print("[Athena] Server started")
+    # print(f"[CallIQ] USE_MOCK    = {os.getenv('USE_MOCK', 'not set (defaulting to true)')}")
+    # print(f"[] Mode        = {'⚠️ MOCK — real audio NOT transcribed' if use_mock else '✅ LIVE — kishoreAI active'}")
+    print(f"[Athena] kishorekey  = {'✓ SET' if has_key else '✗ NOT SET (required for LIVE mode)'}")
+    print(f"[Athena] Docs        = http://localhost:8000/docs")
+    print(f"[Athena] Env check   = http://localhost:8000/api/debug/env")
     print()
-    print("[CallIQ] ⚠️  IMPORTANT: Run with --reload-dir to prevent upload restarts:")
-    print("[CallIQ]    uvicorn main:app --reload --reload-dir . --port 8000")
+    print("[Athena]   IMPORTANT: Run with --reload-dir to prevent upload restarts:")
+    print("[Athena]    uvicorn main:app --reload --reload-dir . --port 8000")
     print("="*60 + "\n")
 
     # ── On startup: reset any orphaned 'processing' records ──────────────────
@@ -83,19 +83,19 @@ async def lifespan(app: FastAPI):
 
     if orphaned:
         store._save_to_disk()
-        print(f"[CallIQ] ⚠️  Reset {orphaned} orphaned 'processing' record(s) to 'failed'")
-        print(f"[CallIQ]    These were stuck because the server restarted during processing.")
-        print(f"[CallIQ]    Re-upload those files to process them.\n")
+        print(f"[Athena] ⚠️  Reset {orphaned} orphaned 'processing' record(s) to 'failed'")
+        print(f"[Athena]    These were stuck because the server restarted during processing.")
+        print(f"[Athena]    Re-upload those files to process them.\n")
 
     yield
 
-    print("[CallIQ] Server shutting down.")
+    print("[Athena] Server shutting down.")
 
 
 # ─── App ──────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
-    title="CallIQ Analytics API",
+    title="Athena Analytics API",
     description="AI-powered call quality analytics. Set USE_MOCK=false for real transcription.",
     version="2.1.0",
     docs_url="/docs",
@@ -143,14 +143,14 @@ async def health():
 # *******************************************************************************************
 # """
 # main.py
-# FastAPI application entry point for CallIQ Analytics API.
+# FastAPI application entry point for Athena Analytics API.
 
 # Run:
 #   uvicorn main:app --reload --port 8000
 
 # Environment variables (.env):
 #   sarvam_api_key=your_key_here
-#   USE_MOCK=true          # set false when using real Sarvam AI
+#   USE_MOCK=true          # set false when using real kishoreAI
 # """
 
 # import os
