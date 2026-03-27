@@ -637,7 +637,7 @@ Focus on key conversation points.
             {"role": "system", "content": "You summarize call transcripts."},
             {"role": "user",   "content": prompt},
         ]
-        response = self.client.chat.completions(messages=messages,temperature=0)
+        response = self.client.chat.completions(messages=messages,temperature=0,)
         return response.choices[0].message.content
 
     def build_combined_summary(self, transcription: str) -> str:

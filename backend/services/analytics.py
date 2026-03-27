@@ -156,6 +156,8 @@ class CallAnalytics:
 
             # ── Step 7: Build CallRecord ───────────────────────────────────────
             call_id = _extract_call_id_from_filename(file_path.name)
+            print("///////////////////////////calll id///////////////////////////////")
+            print(call_id)
             phone = _extract_phone_from_filename(file_path.name)
             flagged_indices = [i for i, e in enumerate(flagged_entries) if e.get("is_flagged")]
 

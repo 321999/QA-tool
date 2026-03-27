@@ -5,6 +5,7 @@ Every step prints to console so you can see EXACTLY what is happening.
 
 import os
 import shutil
+import subprocess
 import traceback
 from pathlib import Path
 from typing import Optional, List
@@ -20,8 +21,12 @@ from models.schemas import (
 
 router = APIRouter()
 
-UPLOAD_DIR = Path("uploads")
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+ENV_FILE = BACKEND_DIR / ".env"
+UPLOAD_DIR = BACKEND_DIR / "uploads"
+PLAYBACK_DIR = BACKEND_DIR / "outputs" / "playback_cache"
 UPLOAD_DIR.mkdir(exist_ok=True)
+PLAYBACK_DIR.mkdir(parents=True, exist_ok=True)
 
 _analytics = None
 
@@ -39,8 +44,12 @@ def get_analytics():
             print("[ANALYTICS INIT]    Fix: set USE_MOCK=false and sarvam_api_key in .env")
         else:
             from sarvamai import SarvamAI
-            from dotenv import load_dotenv
-            load_dotenv()
+            try:
+                from dotenv import load_dotenv
+            except ModuleNotFoundError:  # pragma: no cover - optional during local dev
+                def load_dotenv(*_args, **_kwargs):
+                    return False
+            load_dotenv(ENV_FILE)
             api_key = os.getenv("sarvam_api_key")
             if not api_key:
                 raise RuntimeError("sarvam_api_key not found in .env — add it or set USE_MOCK=true")
@@ -82,6 +91,93 @@ def _process_sync(audio_paths: List[str], call_ids: List[str], job_id: str):
         for cid in call_ids:
             store.update_status(cid, JobStatus.FAILED)
     print("█"*60 + "\n")
+
+
+def _probe_audio_codec(audio_path: Path) -> Optional[str]:
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "a:0",
+                "-show_entries",
+                "stream=codec_name",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(audio_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        codec = result.stdout.strip()
+        return codec or None
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        print(f"[AUDIO] ffprobe failed for {audio_path.name}: {exc}")
+        return None
+
+
+def _prepare_browser_audio(call_id: str, audio_path: Path) -> tuple[Path, str]:
+    codec = _probe_audio_codec(audio_path)
+    print(f"[AUDIO] codec for {audio_path.name}: {codec or 'unknown'}")
+
+    browser_safe_codecs = {
+        "pcm_s16le", "pcm_s16be", "pcm_f32le", "pcm_f32be",
+        "mp3", "aac", "opus", "vorbis", "flac", "alac",
+        "pcm_mulaw", "pcm_alaw"
+    }
+
+    # Need a browser-friendly container/codec for playback.
+    # GSM-in-WAV and other uncommon codecs can fail in <audio> elements.
+    if codec not in browser_safe_codecs:
+        cached_path = PLAYBACK_DIR / f"{call_id}.browser.wav"
+        source_mtime = audio_path.stat().st_mtime
+        needs_refresh = (
+            not cached_path.exists()
+            or cached_path.stat().st_mtime < source_mtime
+            or cached_path.stat().st_size == 0
+        )
+
+        if needs_refresh:
+            print(f"[AUDIO] Transcoding {audio_path.name} -> {cached_path.name}")
+            try:
+                subprocess.run(
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-i",
+                        str(audio_path),
+                        "-ar",
+                        "16000",
+                        "-ac",
+                        "1",
+                        "-c:a",
+                        "pcm_s16le",
+                        str(cached_path),
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+                print(f"[AUDIO] ffmpeg transcode failed for {audio_path.name}: {exc}")
+                return audio_path, _guess_media_type(audio_path)
+
+        return cached_path, "audio/wav"
+
+    return audio_path, _guess_media_type(audio_path)
+
+
+def _guess_media_type(audio_path: Path) -> str:
+    return {
+        ".wav": "audio/wav",
+        ".mp3": "audio/mpeg",
+        ".m4a": "audio/mp4",
+        ".ogg": "audio/ogg",
+        ".webm": "audio/webm",
+    }.get(audio_path.suffix.lower(), "application/octet-stream")
 
 
 @router.post("/upload", response_model=UploadResponse)
@@ -178,21 +274,68 @@ async def get_leaderboard():
     return {"leaderboard": get_analytics().get_leaderboard()}
 
 
+# @router.get("/audio/{call_id}")
+# async def serve_audio(call_id: str):
+#     print(f"[AUDIO DEBUG] call_id={call_id}")
+#     print(f"[AUDIO DEBUG] file_name={record.get('file_name')}") 
+#     print(f"[AUDIO DEBUG] path={audio_path}")
+#     print(f"[AUDIO DEBUG] exists={audio_path.exists()}")
+#     store  = get_store()
+#     record = store.get_by_id(call_id)
+#     if not record:
+#         raise HTTPException(status_code=404, detail="Call not found.")
+
+#     file_name  = record.get("file_name", "")
+#     audio_path = UPLOAD_DIR / file_name
+
+#     print(f"[AUDIO] {call_id} → {audio_path}  exists={audio_path.exists()}", end="")
+#     if audio_path.exists():
+#         sz = audio_path.stat().st_size
+#         print(f"  size={sz} bytes")
+#     else:
+#         print()
+
+#     if not audio_path.exists():
+#         raise HTTPException(status_code=404, detail=f"Audio not on disk: {audio_path.absolute()}")
+
+#     sz = audio_path.stat().st_size
+#     if sz < 100:
+#         raise HTTPException(
+#             status_code=422,
+#             detail="Demo/seed call — no real audio. Upload your own WAV file to hear playback."
+#         )
+
+#     ext  = audio_path.suffix.lower()
+#     mime = {".wav":"audio/wav",".mp3":"audio/mpeg",".m4a":"audio/mp4",".ogg":"audio/ogg",".webm":"audio/webm"}.get(ext,"audio/wav")
+#     return FileResponse(path=str(audio_path), media_type=mime, filename=file_name,
+#                         headers={"Accept-Ranges":"bytes","Cache-Control":"no-cache"})
+
+
+# to sereve the audio file 
 @router.get("/audio/{call_id}")
 async def serve_audio(call_id: str):
-    print(f"[AUDIO DEBUG] call_id={call_id}")
-    print(f"[AUDIO DEBUG] file_name={record.get('file_name')}") 
-    print(f"[AUDIO DEBUG] path={audio_path}")
-    print(f"[AUDIO DEBUG] exists={audio_path.exists()}")
-    store  = get_store()
+
+    store = get_store()
     record = store.get_by_id(call_id)
+    print("getting teh audio file ")
+    print(f"[AUDIO DEBUG] call_id={call_id}")
+    print(f"[AUDIO DEBUG] record={record}")
+
     if not record:
         raise HTTPException(status_code=404, detail="Call not found.")
 
-    file_name  = record.get("file_name", "")
+    file_name = record.get("file_name", "")
+    if not file_name:
+        raise HTTPException(status_code=404, detail="No file_name in record")
+
     audio_path = UPLOAD_DIR / file_name
 
+    print(f"[AUDIO DEBUG] file_name={file_name}")
+    print(f"[AUDIO DEBUG] path={audio_path}")
+    print(f"[AUDIO DEBUG] exists={audio_path.exists()}")
+
     print(f"[AUDIO] {call_id} → {audio_path}  exists={audio_path.exists()}", end="")
+
     if audio_path.exists():
         sz = audio_path.stat().st_size
         print(f"  size={sz} bytes")
@@ -200,7 +343,10 @@ async def serve_audio(call_id: str):
         print()
 
     if not audio_path.exists():
-        raise HTTPException(status_code=404, detail=f"Audio not on disk: {audio_path.absolute()}")
+        raise HTTPException(
+            status_code=404,
+            detail=f"Audio not on disk: {audio_path.absolute()}"
+        )
 
     sz = audio_path.stat().st_size
     if sz < 100:
@@ -209,10 +355,18 @@ async def serve_audio(call_id: str):
             detail="Demo/seed call — no real audio. Upload your own WAV file to hear playback."
         )
 
-    ext  = audio_path.suffix.lower()
-    mime = {".wav":"audio/wav",".mp3":"audio/mpeg",".m4a":"audio/mp4",".ogg":"audio/ogg",".webm":"audio/webm"}.get(ext,"audio/wav")
-    return FileResponse(path=str(audio_path), media_type=mime, filename=file_name,
-                        headers={"Accept-Ranges":"bytes","Cache-Control":"no-cache"})
+    playback_path, mime = _prepare_browser_audio(call_id, audio_path)
+    print(f"[AUDIO] Serving playback file {playback_path.name} as {mime}")
+
+    return FileResponse(
+        path=str(playback_path),
+        media_type=mime,
+        filename=playback_path.name,
+        headers={
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "no-cache"
+        }
+    )
 
 
 @router.post("/seed")

@@ -21,7 +21,8 @@ from models.schemas import (
 )
 
 
-STORE_FILE = Path("outputs/call_store.json")
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+STORE_FILE = BACKEND_DIR / "outputs" / "call_store.json"
 
 
 def _ensure_store_dir():
