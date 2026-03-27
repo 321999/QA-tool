@@ -1769,10 +1769,10 @@ _fl.href = "https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&f
 document.head.appendChild(_fl);
 
 // ─── API Layer (matches your FastAPI routes exactly) ──────────────────────
-// const BASE = "http://localhost:8000/api";
-
-// from local to https
-const BASE = "http://localhost:8000/api";
+const API_HOST = window.location.hostname === "localhost"
+  ? "127.0.0.1"
+  : (window.location.hostname || "127.0.0.1");
+const BASE = `http://${API_HOST}:8000/api`;
 
 const apiFetch = (path, opts) =>
   fetch(`${BASE}${path}`, opts).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); });
@@ -1795,9 +1795,6 @@ const GRADE_CONFIG = {
   poor:      { color: "#f43f5e", bg: "rgba(244,63,94,0.10)",  border: "rgba(244,63,94,0.30)",  label: "Poor",      letter: "D" },
 };
 const gc = (g) => GRADE_CONFIG[g] || { color: "#94a3b8", bg: "transparent", border: "#334155", label: g || "—", letter: "—" };
-
-const fmtScore = (s) => s != null ? `${s}` : "—";
-const fmtPct   = (p) => p != null ? `${p}%` : "—";
 
 // ─── Score Ring ──────────────────────────────────────────────────────────────
 function ScoreRing({ score, size = 72 }) {
@@ -1871,7 +1868,7 @@ function CallListItem({ call, active, onClick }) {
 }
 
 // ─── Transcript View (with red flagging) ─────────────────────────────────────
-function TranscriptView({ transcript, speakerStats }) {
+function TranscriptView({ transcript }) {
   if (!transcript?.length) return (
     <div style={{ color: "#334155", fontFamily: "IBM Plex Mono", fontSize: 12, textAlign: "center", padding: 40 }}>
       Transcript not available
@@ -1931,6 +1928,9 @@ function TranscriptView({ transcript, speakerStats }) {
     </div>
   );
 }
+
+
+
 
 // ─── Analysis Panel ───────────────────────────────────────────────────────────
 function AnalysisPanel({ scorecard }) {
@@ -2056,6 +2056,8 @@ function FatalFlagsPanel({ fatalFlags }) {
   );
 }
 
+
+
 // ─── Audio Player ─────────────────────────────────────────────────────────────
 function AudioPlayer({ audioUrl, callId }) {
   const audioRef = useRef(null);
@@ -2063,46 +2065,109 @@ function AudioPlayer({ audioUrl, callId }) {
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(0.8);
-  const isMock = !audioUrl || audioUrl.includes("localhost");
+  const [loadError, setLoadError] = useState(false);
+  const [reloadToken, setReloadToken] = useState(0);
+  const hasAudio = Boolean(audioUrl);
+  const audioSrc = hasAudio ? `${audioUrl}${audioUrl.includes("?") ? "&" : "?"}reload=${reloadToken}` : undefined;
+  const fmtT = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
-  const fmtT = (s) => `${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,"0")}`;
-
+  console.log("audio player hit")
   useEffect(() => {
-    setPlaying(false); setProgress(0); setDuration(0);
-  }, [callId]);
-
-  useEffect(() => {
-    if (audioRef.current) audioRef.current.volume = volume;
+    if (audioRef.current) {
+      audioRef.current.volume = volume;
+    }
   }, [volume]);
+
+  useEffect(() => {
+    if (audioRef.current && hasAudio) {
+      setLoadError(false);
+      audioRef.current.load();
+    }
+  }, [audioSrc, hasAudio]);
+
+  const togglePlay = async () => {
+    if (!audioRef.current || !hasAudio) {
+      return;
+    }
+
+    if (loadError) {
+      setLoadError(false);
+      setPlaying(false);
+      setProgress(0);
+      setDuration(0);
+      setReloadToken((value) => value + 1);
+      return;
+    }
+
+    if (audioRef.current.paused) {
+      try {
+        await audioRef.current.play();
+      } catch (error) {
+        console.error("Audio playback failed:", error);
+        setLoadError(true);
+      }
+      return;
+    }
+
+    audioRef.current.pause();
+  };
+
+
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "0 8px", height: "100%" }}>
-      <audio ref={audioRef} src={isMock ? undefined : audioUrl}
-        onTimeUpdate={() => { if (audioRef.current) setProgress(audioRef.current.currentTime); }}
-        onLoadedMetadata={() => { if (audioRef.current) setDuration(audioRef.current.duration); }}
-        onEnded={() => setPlaying(false)} />
+      <audio
+        key={`${callId}-${reloadToken}`}
+        ref={audioRef}
+        src={audioSrc}
+        preload="metadata"
+        crossOrigin="anonymous"
+        onTimeUpdate={() => {
+          if (audioRef.current) {
+            setProgress(audioRef.current.currentTime);
+          }
+        }}
+        onLoadedMetadata={() => {
+          if (audioRef.current) {
+            setDuration(audioRef.current.duration || 0);
+          }
+          setLoadError(false);
+        }}
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => {
+          setPlaying(false);
+          setProgress(0);
+        }}
+        onError={(event) => {
+          console.error("Audio failed to load:", audioUrl, event);
+          setLoadError(true);
+          setPlaying(false);
+        }}
+      />
+
 
       {/* Play/Pause */}
-      <button onClick={() => {
-        if (!audioRef.current || isMock) return;
-        playing ? audioRef.current.pause() : audioRef.current.play();
-        setPlaying(p => !p);
-      }} style={{
+      <button onClick={togglePlay} style={{
         width: 38, height: 38, borderRadius: "50%",
-        background: "#6366f1", border: "none", cursor: "pointer",
+        background: hasAudio && !loadError ? "#6366f1" : "#1e293b",
+        border: "none", cursor: hasAudio && !loadError ? "pointer" : "default",
         display: "flex", alignItems: "center", justifyContent: "center",
-        boxShadow: "0 0 20px #6366f155", flexShrink: 0,
+        boxShadow: hasAudio && !loadError ? "0 0 20px #6366f155" : "none", flexShrink: 0,
       }}>
         {playing
           ? <svg width="14" height="14" viewBox="0 0 24 24" fill="white"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
-          : <svg width="14" height="14" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg>}
+          : loadError
+            ? <svg width="14" height="14" viewBox="0 0 24 24" fill="#fca5a5"><path d="M12 5v14m-7-7h14"/></svg>
+            : <svg width="14" height="14" viewBox="0 0 24 24" fill={hasAudio ? "white" : "#334155"}><path d="M8 5v14l11-7z"/></svg>}
       </button>
+
 
       {/* Seek */}
       <span style={{ fontSize: 10, color: "#475569", fontFamily: "IBM Plex Mono", width: 32, flexShrink: 0 }}>{fmtT(progress)}</span>
       <div style={{ flex: 1, height: 4, background: "#1e293b", borderRadius: 4, position: "relative", cursor: "pointer" }}
         onClick={e => {
-          if (!audioRef.current || isMock) return;
+          if (!audioRef.current || !hasAudio || loadError || !duration) return;
           const rect = e.currentTarget.getBoundingClientRect();
           const pct = (e.clientX - rect.left) / rect.width;
           audioRef.current.currentTime = pct * duration;
@@ -2119,7 +2184,36 @@ function AudioPlayer({ audioUrl, callId }) {
         onChange={e => setVolume(Number(e.target.value))}
         style={{ width: 64, accentColor: "#6366f1", cursor: "pointer" }} />
 
-      {isMock && <span style={{ fontSize: 9, color: "#334155", fontFamily: "IBM Plex Mono" }}>MOCK MODE</span>}
+      {!hasAudio && <span style={{ fontSize: 9, color: "#334155", fontFamily: "IBM Plex Mono" }}>No audio</span>}
+      {hasAudio && (
+      
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {loadError && <span style={{ fontSize: 9, color: "#f43f5e", fontFamily: "IBM Plex Mono" }}>Audio failed</span>}
+      
+          <button
+            onClick={() => setReloadToken((v) => v + 1)}
+            style={{ fontSize: 9, color: "#a5b4fc", fontFamily: "IBM Plex Mono", background: "transparent", border: "1px solid #475569", borderRadius: 4, padding: "2px 6px", cursor: "pointer" }}
+          >
+            Retry
+          </button>
+      
+          <a
+            href={audioUrl}
+            target="_blank"
+            rel="noreferrer"
+            style={{ fontSize: 9, color: "#a5b4fc", fontFamily: "IBM Plex Mono", textDecoration: "none" }}
+          >
+            Open audio
+          </a>
+          <a
+            href={audioUrl}
+            download
+            style={{ fontSize: 9, color: "#a5b4fc", fontFamily: "IBM Plex Mono", textDecoration: "none" }}
+          >
+            Download
+          </a>
+        </div>
+      )}
     </div>
   );
 }
@@ -2144,7 +2238,7 @@ export default function App() {
       setMetrics(data.metrics);
       setCallList(data.calls);
       setError(null);
-    } catch (e) {
+    } catch {
       setError("Backend not connected. Run: uvicorn main:app --reload");
     } finally {
       setLoading(false);
@@ -2155,34 +2249,67 @@ export default function App() {
 
   // ── Auto-refresh processing calls ────────────────────────────────────────
   useEffect(() => {
+    const activePollers = pollingRef.current;
     const processing = callList.filter(c => c.status === "processing" || c.status === "pending");
     processing.forEach(c => {
-      if (pollingRef.current[c.call_id]) return;
-      pollingRef.current[c.call_id] = setInterval(async () => {
+      if (activePollers[c.call_id]) return;
+      activePollers[c.call_id] = setInterval(async () => {
         try {
           const updated = await API.call(c.call_id);
           if (updated.status === "completed" || updated.status === "failed") {
-            clearInterval(pollingRef.current[c.call_id]);
-            delete pollingRef.current[c.call_id];
+            clearInterval(activePollers[c.call_id]);
+            delete activePollers[c.call_id];
+            if (selectedCall?.call_id === c.call_id) {
+              setCallDetail(updated);
+              setSelectedCall((current) => (current?.call_id === updated.call_id ? {
+                ...current,
+                status: updated.status,
+                total_score: updated.total_score,
+                grade: updated.grade,
+                has_fatal: Boolean(updated.scorecard && Object.values(updated.scorecard.fatal_flags || {}).includes("F")),
+                agent_id: updated.agent_id,
+                duration_formatted: updated.duration_formatted,
+              } : current));
+            }
             loadDashboard(activeGrade);
           }
-        } catch (_) {}
+        } catch (pollError) {
+          console.error("Polling failed for call", c.call_id, pollError);
+        }
       }, 4000);
     });
-    return () => Object.values(pollingRef.current).forEach(clearInterval);
-  }, [callList]);
+    return () => Object.values(activePollers).forEach(clearInterval);
+  }, [callList, activeGrade, loadDashboard, selectedCall?.call_id]);
 
-  // ── Load call detail ──────────────────────────────────────────────────────
-  const selectCall = async (callItem) => {
+  // ── Select call and load detail ────────────────────────────────────────────
+  const selectCall = useCallback(async (callItem) => {
     setSelectedCall(callItem);
     setCallDetail(null);
+    setActiveTab("transcript");
+    setError(null);
+
     try {
       const detail = await API.call(callItem.call_id);
+      setSelectedCall((current) => (current?.call_id === callItem.call_id ? {
+        ...callItem,
+        status: detail.status,
+        total_score: detail.total_score,
+        grade: detail.grade,
+        has_fatal: Boolean(detail.scorecard && Object.values(detail.scorecard.fatal_flags || {}).includes("F")),
+        agent_id: detail.agent_id,
+        duration_formatted: detail.duration_formatted,
+      } : current));
       setCallDetail(detail);
-    } catch (e) {
-      console.error("Could not load call detail:", e);
+    } catch (loadError) {
+      console.error("Could not load call detail:", loadError);
+      setCallDetail({
+        transcript: [],
+        speaker_stats: [],
+        scorecard: null,
+      });
+      setError(`Could not load call ${callItem.call_id}.`);
     }
-  };
+  }, []);
 
   // ── Upload ────────────────────────────────────────────────────────────────
   const handleUpload = async (files) => {
@@ -2190,8 +2317,8 @@ export default function App() {
     try {
       await API.upload(files);
       await loadDashboard(activeGrade);
-    } catch (e) {
-      alert("Upload failed. Is the backend running?");
+    } catch {
+      alert("Upload failed. backend nahi chal rha?");
     } finally {
       setUploading(false);
     }
@@ -2202,7 +2329,7 @@ export default function App() {
     try {
       await API.seed();
       await loadDashboard(null);
-    } catch (e) {
+    } catch {
       alert("Seed failed. Is USE_MOCK=true set in backend?");
     }
   };
@@ -2229,7 +2356,7 @@ export default function App() {
 
         {/* Upload zone */}
         <div style={{ padding: "12px 12px 8px" }}>
-          <input ref={fileInputRef} type="file" multiple accept=".wav,.mp3,.m4a" style={{ display: "none" }} onChange={e => handleUpload(Array.from(e.target.files))} />
+          <input ref={fileInputRef} type="file" multiple accept=".wav,.mp3,.m4a" style={{ display: "none" }} onChange={(event) => handleUpload(Array.from(event.target.files || []))} />
           <button onClick={() => fileInputRef.current.click()} style={{
             width: "100%", padding: "10px", borderRadius: 10,
             background: uploading ? "rgba(99,102,241,0.15)" : "rgba(15,23,42,0.6)",
@@ -2336,7 +2463,7 @@ export default function App() {
                 {!callDetail
                   ? <div style={{ color: "#334155", fontFamily: "IBM Plex Mono", fontSize: 12, textAlign: "center", padding: 40 }}>Loading…</div>
                   : activeTab === "transcript"
-                    ? <TranscriptView transcript={callDetail.transcript} speakerStats={callDetail.speaker_stats} />
+                    ? <TranscriptView transcript={callDetail.transcript} />
                     : <AnalysisPanel scorecard={callDetail.scorecard} />
                 }
               </div>
@@ -2412,7 +2539,7 @@ export default function App() {
         {/* ── AUDIO PLAYER (bottom fixed) ──────────────────────────────────── */}
         <div style={{ height: 56, flexShrink: 0, borderTop: "1px solid #0f172a", background: "rgba(2,8,23,0.95)", backdropFilter: "blur(8px)" }}>
           {selectedCall
-            ? <AudioPlayer audioUrl={API.audioUrl(selectedCall.call_id)} callId={selectedCall.call_id} />
+            ? <AudioPlayer key={selectedCall.call_id} audioUrl={API.audioUrl(selectedCall.call_id)} callId={selectedCall.call_id} />
             : <div style={{ height: "100%", display: "flex", alignItems: "center", paddingLeft: 20, fontSize: 10, color: "#1e3a5f", fontFamily: "IBM Plex Mono" }}>Select a call to play audio</div>}
         </div>
       </div>
